@@ -1,0 +1,63 @@
+name: CI/CD Pipeline - Build, Push & Deploy to EC2
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-push:
+    name: Build & Push Docker Image
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and Push Docker Image
+        env:
+          IMAGE: ${{ secrets.DOCKER_USERNAME }}/myapp
+          TAG: ${{ github.sha }}
+        run: |
+          docker build -t $IMAGE:latest -t $IMAGE:$TAG .
+          docker push $IMAGE:$TAG
+          docker push $IMAGE:latest
+
+  deploy-to-ec2:
+    name: Deploy to EC2 Instance
+    needs: build-and-push
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HOST_DNS }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            IMAGE=${{ secrets.DOCKER_USERNAME }}/myapp
+            TAG=${{ github.sha }}
+
+            echo "Stopping and removing the old container if it exists..."
+            sudo docker stop myapp || true
+            sudo docker rm myapp || true
+
+            echo "Pulling the latest image ($TAG)..."
+            sudo docker pull $IMAGE:$TAG
+
+            echo "Starting the new container..."
+            sudo docker run -d \
+              --restart always \
+              --name myapp \
+              -p 8080:80 \
+              $IMAGE:$TAG
+
+            echo "Cleaning up old unused Docker images to save space..."
+            sudo docker image prune -f
